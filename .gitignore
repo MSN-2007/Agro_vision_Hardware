@@ -31,9 +31,10 @@ raspberry_pi/temp_media/
 *.log
 raspberry_pi/logs/
 
-# IDE
+# IDE & Agent
 .vscode/
 .idea/
+.gemini/
 *.swp
 *.swo
 
