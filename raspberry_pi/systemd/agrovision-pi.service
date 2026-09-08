@@ -1,0 +1,40 @@
+[Unit]
+Description=AgroVision Physical Hardware Assistant Client
+Documentation=https://github.com/agrovision/raspberry-pi
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Run as the 'pi' user (default Raspberry Pi OS user)
+User=pi
+Group=pi
+
+# Working directory — updated by deploy.sh
+WorkingDirectory=/home/pi/agrovision-pi
+
+# Use the virtual environment Python so all packages are available
+ExecStart=/home/pi/agrovision-pi/venv/bin/python main.py
+
+# Load the .env file — keeps secrets off command line
+EnvironmentFile=-/home/pi/agrovision-pi/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONPATH=/home/pi/agrovision-pi
+
+# Restart policy: restart after crash, wait 5s, retry up to 5 times
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+# Logging — view with: sudo journalctl -u agrovision-pi -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agrovision-pi
+
+# Allow camera, I2C, audio hardware access
+SupplementaryGroups=video audio i2c gpio
+
+[Install]
+WantedBy=multi-user.target

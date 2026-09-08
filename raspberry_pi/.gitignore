@@ -1,0 +1,52 @@
+# ==============================================================================
+# AgroVision Raspberry Pi — Git Ignore
+# ==============================================================================
+
+# --- Secrets (NEVER commit these) ---
+.env
+config/device_config.json
+
+# --- Python artifacts ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Virtual environment ---
+venv/
+env/
+.venv/
+
+# --- Temporary media (captured locally, uploaded to backend) ---
+temp_media/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.h264
+*.webm
+
+# --- Logs ---
+*.log
+logs/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Testing artifacts ---
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Pi-specific runtime state ---
+recording_state.json

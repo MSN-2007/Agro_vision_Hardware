@@ -1,0 +1,68 @@
+# ==============================================================================
+# AgroVision Raspberry Pi — Example Configuration
+# ==============================================================================
+# Copy this to config.yaml and fill in your values.
+# Most settings are also configurable via the .env file.
+# ==============================================================================
+
+agrovision:
+  # AgroVision backend server URL
+  # For local development: http://localhost:5000
+  # For LAN deployment:    http://192.168.1.x:5000
+  # For cloud deployment:  https://your-backend-domain.com
+  backend_url: "http://localhost:5000"
+
+  # AgroVision environment (development | production)
+  environment: "production"
+
+device:
+  # Unique device identifier — generated once, persists across reboots
+  # Recommended format: AGRO_PI_001, AGRO_PI_002, etc.
+  id: "AGRO_PI_001"
+  name: "AgroVision Field Hub"
+
+  # Default farm and field assignment (overridden by pairing)
+  default_farm_id: "farm-gv-01"
+  default_field_id: "field-mango-01"
+  default_user_id: "user-ravi-01"
+
+hardware:
+  # OLED Display
+  oled:
+    enabled: true
+    i2c_port: 1           # I2C bus number (usually 1 on Raspberry Pi)
+    i2c_address: "0x3C"   # Common addresses: 0x3C or 0x3D
+    width: 128
+    height: 64
+    driver: "ssd1306"     # ssd1306 | sh1106 | auto
+
+  # Microphone
+  microphone:
+    enabled: true
+    listen_timeout_sec: 5
+    phrase_time_limit_sec: 10
+
+  # Speaker / TTS
+  speaker:
+    enabled: true
+    tts_engine: "pyttsx3"  # pyttsx3 | gtts
+    speech_rate: 150
+
+  # Camera
+  camera:
+    enabled: true
+    max_video_duration_sec: 60
+    photo_resolution: "1920x1080"
+    video_resolution: "1280x720"
+
+logging:
+  level: "INFO"     # DEBUG | INFO | WARNING | ERROR
+  log_to_file: false
+  log_file: "logs/agrovision-pi.log"
+
+heartbeat:
+  interval_sec: 30
+
+pairing:
+  timeout_sec: 600   # 10 minutes
+  poll_interval_sec: 5

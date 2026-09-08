@@ -1,0 +1,48 @@
+# AgroVision Hardware Hub — Root .gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Secrets & device credentials
+.env
+raspberry_pi/config/device_config.json
+
+# Temporary media (captured on Pi, uploaded to backend)
+raspberry_pi/temp_media/
+*.jpg
+*.jpeg
+*.png
+*.mp4
+*.h264
+*.webm
+
+# Logs
+*.log
+raspberry_pi/logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+raspberry_pi/recording_state.json
