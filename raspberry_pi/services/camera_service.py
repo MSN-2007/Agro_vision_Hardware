@@ -57,6 +57,13 @@ class CameraService:
         f_id = farm_id or self.auth.device_config.farmId
         fld_id = field_id or self.auth.device_config.fieldId
 
+        # Guard: Check camera capability
+        if hasattr(self.driver, "is_available") and not self.driver.is_available:
+            logger.info("[CAMERA] Photo capture skipped: camera is currently unavailable.")
+            if self.display:
+                self.display.show_camera_error("Camera unavailable")
+            return None
+
         logger.info(f"[CAMERA] Starting photo capture for farm={f_id}, field={fld_id}")
         if self.display:
             self.display.show_taking_photo()
@@ -140,6 +147,12 @@ class CameraService:
 
     def start_video(self, farm_id: Optional[str] = None, field_id: Optional[str] = None) -> bool:
         """Starts video recording with auto-stop watchdog thread."""
+        if hasattr(self.driver, "is_available") and not self.driver.is_available:
+            logger.info("[CAMERA] Video recording skipped: camera is currently unavailable.")
+            if self.display:
+                self.display.show_camera_error("Camera unavailable")
+            return False
+
         if self.is_recording:
             logger.warning("[CAMERA] Video recording is already in progress.")
             if self.speaker:

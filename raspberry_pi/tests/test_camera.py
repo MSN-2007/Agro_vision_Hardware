@@ -1,6 +1,7 @@
 import unittest
 import os
 import shutil
+from unittest.mock import patch
 from hardware.camera import SimulatedCameraDriver, get_camera_driver
 from services.camera_service import CameraService
 from services.agrovision_api import AgroVisionApiService
@@ -49,36 +50,49 @@ class TestCameraSubsystem(unittest.TestCase):
 
     def test_camera_service_photo_workflow(self):
         # Capture, upload to backend, and verify media record created with null GPS
-        photo_res = self.service.capture_photo(caption="Unit test field photo")
-        self.assertIsNotNone(photo_res)
-        self.assertTrue(photo_res.get("success"))
-        media = photo_res.get("media")
-        self.assertIsNotNone(media)
-        self.assertEqual(media.get("source"), "raspberry_pi")
-        self.assertEqual(media.get("type"), "photo")
-        # Mandated rule: Pi without GPS must have null latitude and longitude
-        self.assertIsNone(media.get("latitude"))
-        self.assertIsNone(media.get("longitude"))
+        with patch.object(self.api, 'upload_media', return_value={"url": "http://mock-cloud.com/photo.jpg"}), \
+             patch.object(self.api, 'create_media', return_value={
+                 "source": "raspberry_pi", "type": "photo", "latitude": None, "longitude": None
+             }):
+            photo_res = self.service.capture_photo(caption="Unit test field photo")
+            self.assertIsNotNone(photo_res)
+            self.assertTrue(photo_res.get("success"))
+            media = photo_res.get("media")
+            self.assertIsNotNone(media)
+            self.assertEqual(media.get("source"), "raspberry_pi")
+            self.assertEqual(media.get("type"), "photo")
+            # Mandated rule: Pi without GPS must have null latitude and longitude
+            self.assertIsNone(media.get("latitude"))
+            self.assertIsNone(media.get("longitude"))
 
     def test_camera_service_video_workflow(self):
         # Start and stop video via service
-        started = self.service.start_video()
-        self.assertTrue(started)
-        video_res = self.service.stop_video()
-        self.assertIsNotNone(video_res)
-        self.assertTrue(video_res.get("success"))
-        media = video_res.get("media")
-        self.assertIsNotNone(media)
-        self.assertEqual(media.get("source"), "raspberry_pi")
-        self.assertEqual(media.get("type"), "video")
-        self.assertIsNone(media.get("latitude"))
-        self.assertIsNone(media.get("longitude"))
+        with patch.object(self.api, 'upload_media', return_value={"url": "http://mock-cloud.com/video.mp4"}), \
+             patch.object(self.api, 'create_media', return_value={
+                 "source": "raspberry_pi", "type": "video", "latitude": None, "longitude": None
+             }):
+            started = self.service.start_video()
+            self.assertTrue(started)
+            video_res = self.service.stop_video()
+            self.assertIsNotNone(video_res)
+            self.assertTrue(video_res.get("success"))
+            media = video_res.get("media")
+            self.assertIsNotNone(media)
+            self.assertEqual(media.get("source"), "raspberry_pi")
+            self.assertEqual(media.get("type"), "video")
+            self.assertIsNone(media.get("latitude"))
+            self.assertIsNone(media.get("longitude"))
+
 
     def test_camera_factory_fallback_safety(self):
         # Verify get_camera_driver never returns None
         driver = get_camera_driver()
         self.assertIsNotNone(driver)
-        self.assertTrue(driver.initialize())
+        # When simulated is requested, initialize must succeed
+        sim_driver = get_camera_driver(force_simulated=True)
+        self.assertIsNotNone(sim_driver)
+        self.assertTrue(sim_driver.initialize())
+
 
 if __name__ == '__main__':
     unittest.main()

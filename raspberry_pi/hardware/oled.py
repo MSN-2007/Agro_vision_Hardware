@@ -42,13 +42,18 @@ class ConsoleOledDriver(DisplayDriver):
         pass
 
 class LumaOledDriver(DisplayDriver):
-    def __init__(self, port=1, address=0x3C, width=128, height=64):
+    def __init__(self, port=1, address=0x3C, width=128, height=64, enable_fallback=False):
         self.port = port
         self.address = address
         self.width = width
         self.height = height
         self.device = None
-        self.fallback = ConsoleOledDriver()
+        self.enable_fallback = enable_fallback
+        self.fallback = ConsoleOledDriver() if enable_fallback else None
+
+    @property
+    def is_available(self) -> bool:
+        return self.device is not None
 
     def initialize(self) -> bool:
         try:
@@ -59,8 +64,17 @@ class LumaOledDriver(DisplayDriver):
             logger.info(f"[OLED] Hardware SSD1306 OLED initialized on I2C port={self.port}, addr=0x{self.address:02X}")
             return True
         except Exception as e:
-            logger.info(f"[OLED] Physical I2C display not detected ({e}). Using Console OLED emulator.")
-            return self.fallback.initialize()
+            logger.info(f"[OLED] Physical I2C display not detected ({e}).")
+            self.device = None
+            if self.fallback:
+                return self.fallback.initialize()
+            return False
+
+    def detect_hardware(self) -> bool:
+        """Attempt to re-initialize OLED hardware if not already connected."""
+        if self.is_available:
+            return True
+        return self.initialize()
 
     def show_text(self, lines: List[str], title: Optional[str] = None) -> None:
         if self.device:
@@ -89,7 +103,8 @@ class LumaOledDriver(DisplayDriver):
             except Exception as e:
                 logger.warning(f"[OLED] Framebuffer draw error: {e}")
 
-        self.fallback.show_text(lines, title)
+        if self.fallback:
+            self.fallback.show_text(lines, title)
 
     def clear(self) -> None:
         if self.device:
@@ -97,4 +112,6 @@ class LumaOledDriver(DisplayDriver):
                 self.device.clear()
             except Exception:
                 pass
-        self.fallback.clear()
+        if self.fallback:
+            self.fallback.clear()
+

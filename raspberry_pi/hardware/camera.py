@@ -6,6 +6,7 @@ import platform
 import shutil
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any
+from config.settings import settings
 from utils.logger import logger
 
 class CameraDriver(ABC):
@@ -331,31 +332,80 @@ class SimulatedCameraDriver(CameraDriver):
         self.is_recording = False
 
 
-def get_camera_driver() -> CameraDriver:
+class UnavailableCameraDriver(CameraDriver):
+    """Driver representing unavailable, detached, or disabled camera hardware."""
+    def __init__(self, reason: str = "UNAVAILABLE"):
+        self.reason = reason
+
+    @property
+    def is_available(self) -> bool:
+        return False
+
+    def initialize(self) -> bool:
+        logger.info(f"[CAMERA] Camera is {self.reason.lower()} for current hardware configuration.")
+        return False
+
+    def check_camera(self) -> Dict[str, Any]:
+        return {
+            "type": "None",
+            "detected": False,
+            "status": f"Camera {self.reason}"
+        }
+
+    def capture_photo(self, output_path: str) -> Optional[Dict[str, Any]]:
+        logger.warning(f"[CAMERA] Photo capture attempted while camera is {self.reason}.")
+        return None
+
+    def start_video(self, output_path: str) -> bool:
+        logger.warning(f"[CAMERA] Video recording attempted while camera is {self.reason}.")
+        return False
+
+    def stop_video(self) -> Optional[Dict[str, Any]]:
+        return None
+
+    def release(self) -> None:
+        pass
+
+
+def get_camera_driver(force_simulated: bool = False) -> CameraDriver:
     """
     Hardware inspection factory.
-    Determines available camera interfaces:
-    1. Pi CSI (libcamera / rpicam)
-    2. USB Webcam (/dev/video*)
-    3. Simulated Field Imagery fallback
+    Returns:
+    1. SimulatedCameraDriver if explicitly requested (e.g. test fixtures)
+    2. UnavailableCameraDriver if camera is disabled in settings
+    3. LibcameraDriver if Raspberry Pi CSI camera detected
+    4. V4L2CameraDriver if USB webcam verified
+    5. UnavailableCameraDriver if no physical camera detected
     """
+    if force_simulated:
+        return SimulatedCameraDriver()
+
+    if not settings.CAMERA_ENABLED:
+        logger.info("[CAMERA] Camera disabled by configuration (CAMERA_ENABLED=false).")
+        return UnavailableCameraDriver(reason="DISABLED")
+
     # 1. Check for Raspberry Pi CSI camera
-    for cmd in ["rpicam-still", "libcamera-still"]:
+    for cmd in ["rpicam-hello", "libcamera-hello", "rpicam-still", "libcamera-still"]:
         if shutil.which(cmd):
             try:
                 res = subprocess.run([cmd, "--list-cameras"], capture_output=True, text=True, timeout=2)
-                if res.returncode == 0 and "No cameras available" not in res.stdout:
+                if res.returncode == 0 and "No cameras available" not in res.stdout and "Available cameras" in res.stdout:
                     logger.info(f"[CAMERA] Raspberry Pi CSI camera detected using {cmd}")
                     return LibcameraDriver()
             except Exception:
                 pass
 
-    # 2. Check for V4L2 USB cameras
-    for dev in ["/dev/video0", "/dev/video1"]:
-        if os.path.exists(dev):
-            logger.info(f"[CAMERA] USB V4L2 camera detected at {dev}")
-            return V4L2CameraDriver(dev)
+    # 2. Check for V4L2 USB cameras (must verify via v4l2-ctl; do NOT assume /dev/video* alone)
+    if shutil.which("v4l2-ctl"):
+        try:
+            res = subprocess.run(["v4l2-ctl", "--list-devices"], capture_output=True, text=True, timeout=2)
+            if res.returncode == 0 and "bcm2835" not in res.stdout.lower() and "camera" in res.stdout.lower():
+                dev = "/dev/video0" if os.path.exists("/dev/video0") else "/dev/video1"
+                logger.info(f"[CAMERA] USB V4L2 camera verified at {dev}")
+                return V4L2CameraDriver(dev)
+        except Exception:
+            pass
 
-    # 3. Fallback to Simulated Driver
-    logger.info("[CAMERA] Physical camera not detected. Initializing Simulated Field Camera driver.")
-    return SimulatedCameraDriver()
+    logger.info("[CAMERA] Physical camera not detected.")
+    return UnavailableCameraDriver(reason="UNAVAILABLE")
+

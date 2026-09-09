@@ -4,17 +4,19 @@ import time
 import argparse
 from config.settings import settings
 from utils.logger import logger
+from hardware.capabilities import hardware_manager, HardwareState
 from hardware.oled import LumaOledDriver, ConsoleOledDriver
-from hardware.microphone import AlsaAudioDriver, TextModeAudioDriver
+from hardware.microphone import get_audio_input_driver, TextModeAudioDriver
 from hardware.speaker import TtsSpeakerDriver, ConsoleSpeakerDriver
+from hardware.camera import get_camera_driver
 from ui.display_manager import DisplayManager
+from ui.terminal_ui import TerminalUI
 from services.agrovision_api import AgroVisionApiService
 from services.auth_service import AuthService
 from services.sync_service import RealtimeSyncService
 from services.heartbeat_service import HeartbeatService
 from services.network_service import NetworkService
 from services.voice_service import VoiceService
-from hardware.camera import get_camera_driver
 from services.camera_service import CameraService
 
 
@@ -29,42 +31,45 @@ def handle_sync_event(event_type: str, data: dict, display: DisplayManager, spea
     """
     logger.info(f"[REALTIME EVENT] '{event_type}': {data}")
 
+    title = data.get("title", data.get("name", data.get("caption", "")))
+
     if event_type == "TASK_CREATED":
-        title = data.get("title", "New Task")
         display.show_speaking(f"NEW TASK\n{title[:18]}")
-        speaker.speak(f"New field task received: {title}")
+        if speaker:
+            speaker.speak(f"New field task received: {title}")
+        print(f"\n🔔 [REALTIME] New Task Created: '{title}'\nAgroVision > ", end="", flush=True)
 
     elif event_type == "TASK_UPDATED":
-        title = data.get("title", "Task")
         status = data.get("status", "Updated")
         display.show_speaking(f"TASK {status.upper()}\n{title[:18]}")
+        print(f"\n🔔 [REALTIME] Task Updated: '{title}' [{status}]\nAgroVision > ", end="", flush=True)
 
     elif event_type == "TASK_DELETED":
         display.show_speaking("TASK DELETED\nSync'd with cloud")
+        print(f"\n🔔 [REALTIME] Task Deleted from cloud\nAgroVision > ", end="", flush=True)
 
     elif event_type == "OBSERVATION_CREATED":
-        title = data.get("title", data.get("content", "Observation"))
         src = data.get("source", "")
-        # Only announce observations from OTHER sources (not ones we created)
         if src != "raspberry_pi":
             display.show_speaking(f"NEW NOTE\n{title[:18]}")
+            print(f"\n🔔 [REALTIME] Field Note Created: '{title}'\nAgroVision > ", end="", flush=True)
 
     elif event_type == "REMINDER_CREATED":
-        title = data.get("title", "Reminder")
         display.show_speaking(f"REMINDER\n{title[:18]}")
-        speaker.speak(f"New reminder: {title}")
+        if speaker:
+            speaker.speak(f"New reminder: {title}")
+        print(f"\n🔔 [REALTIME] Reminder: '{title}'\nAgroVision > ", end="", flush=True)
 
     elif event_type in ("PHOTO_CREATED", "VIDEO_CREATED"):
-        caption = data.get("caption", "Field Media")
         src = data.get("source", "")
         m_type = "PHOTO" if event_type == "PHOTO_CREATED" else "VIDEO"
-        # Only announce media from OTHER sources (not ones we just uploaded)
         if src != "raspberry_pi":
-            display.show_speaking(f"NEW {m_type}\n{caption[:18]}")
+            display.show_speaking(f"NEW {m_type}\n{title[:18]}")
+            print(f"\n🔔 [REALTIME] New {m_type}: '{title}'\nAgroVision > ", end="", flush=True)
 
     elif event_type == "WEATHER_UPDATED":
-        field_id = data.get("fieldId", "")
         display.show_speaking("WEATHER\nUpdated by server")
+        print("\n🔔 [REALTIME] Field weather data refreshed by server\nAgroVision > ", end="", flush=True)
 
     elif event_type == "DEVICE_STATUS_CHANGED":
         device_id = data.get("deviceId", "")
@@ -73,8 +78,8 @@ def handle_sync_event(event_type: str, data: dict, display: DisplayManager, spea
             logger.info(f"[REALTIME] Device status changed: {status}")
 
     elif event_type == "FIELD_UPDATED":
-        name = data.get("name", "Field")
-        display.show_speaking(f"FIELD UPDATED\n{name[:18]}")
+        display.show_speaking(f"FIELD UPDATED\n{title[:18]}")
+        print(f"\n🔔 [REALTIME] Field updated: '{title}'\nAgroVision > ", end="", flush=True)
 
 
 # ==============================================================================
@@ -84,33 +89,22 @@ def handle_sync_event(event_type: str, data: dict, display: DisplayManager, spea
 def run_pairing_flow(api: AgroVisionApiService, auth: AuthService, display: DisplayManager, speaker) -> bool:
     """
     Executes the full device pairing flow when the Pi is not yet paired.
-
-    Flow:
-      1. Request a pairing code from the backend
-      2. Display it on the OLED (and print to console)
-      3. Poll the backend until the user claims the code via mobile/web
-      4. Save the returned credentials to device_config.json
-      5. Return True if paired successfully, False on timeout
-
-    The .env or device_config.json stores these credentials persistently.
     """
     logger.info("[PAIRING] Device not paired. Starting pairing flow...")
-    speaker.speak("AgroVision is not paired. Requesting pairing code.")
+    if speaker:
+        speaker.speak("AgroVision is not paired. Requesting pairing code.")
 
     # Step 1: Get pairing code from backend
     pairing_code = api.request_pairing_code()
     if not pairing_code:
         display.show_error("Pairing failed")
-        speaker.speak("Could not get pairing code from the backend. Check network connection.")
+        if speaker:
+            speaker.speak("Could not get pairing code from the backend. Check network connection.")
         return False
 
-    # Step 2: Display on OLED
+    # Step 2: Display on OLED & terminal
     logger.info(f"[PAIRING] Pairing code: {pairing_code}")
     display.show_pairing(pairing_code)
-    speaker.speak(
-        f"Pairing code: {' '.join(pairing_code)}. "
-        "Enter this code in the AgroVision mobile app or website to connect this device."
-    )
 
     print("\n" + "=" * 50)
     print("🔗 AGROVISION DEVICE PAIRING")
@@ -135,7 +129,6 @@ def run_pairing_flow(api: AgroVisionApiService, auth: AuthService, display: Disp
         logger.debug(f"[PAIRING] Poll {elapsed}s: status={status}")
 
         if status == "claimed":
-            # Step 4: Extract and save credentials
             token = status_data.get("token")
             farm_id = status_data.get("farmId", settings.DEFAULT_FARM_ID)
             field_id = status_data.get("fieldId", settings.DEFAULT_FIELD_ID)
@@ -154,82 +147,21 @@ def run_pairing_flow(api: AgroVisionApiService, auth: AuthService, display: Disp
                 authToken=token,
             )
             auth.save_config(cfg)
-
-            # Update API headers with new user ID
             api._update_headers(user_id=user_id)
 
             logger.info(f"[PAIRING] Paired successfully. Farm={farm_id}, Field={field_id}, User={user_id}")
             display.show_speaking(f"PAIRED!\nFarm: {farm_id[:16]}\nField: {field_id[:16]}")
-            speaker.speak("Device paired successfully! AgroVision is now connected to your farm.")
-            time.sleep(2)
+            if speaker:
+                speaker.speak("Device paired successfully! AgroVision is now connected to your farm.")
             return True
 
         elif status == "expired":
             logger.warning("[PAIRING] Pairing code expired.")
             break
 
-        # Show countdown on OLED every 30s
-        if elapsed % 30 == 0:
-            remaining = timeout - elapsed
-            display.show_pairing(f"{pairing_code}\n{remaining}s left")
-
-    # Pairing timed out
     display.show_error("Pairing timeout")
-    speaker.speak("Pairing timed out. Restarting...")
-    logger.warning("[PAIRING] Pairing timed out after {} seconds".format(timeout))
+    logger.warning(f"[PAIRING] Pairing timed out after {timeout} seconds")
     return False
-
-
-# ==============================================================================
-# Health Check
-# ==============================================================================
-
-def run_health_check(api: AgroVisionApiService, net: NetworkService, oled, mic, speaker, cam_driver):
-    """Runs a comprehensive hardware + software health check and prints results."""
-    print("\n" + "=" * 50)
-    print("🌿 AGROVISION HARDWARE & SYSTEM HEALTH CHECK")
-    print("=" * 50)
-
-    oled_ok = oled.initialize()
-    mic_ok = mic.initialize()
-    speaker_ok = speaker.initialize()
-    cam_info = cam_driver.check_camera()
-    cam_ok = cam_driver.initialize()
-    net_ok = net.is_connected()
-    backend_ok = api.check_health()
-    ip_addr = net.get_ip_address()
-
-    results = {
-        "OLED Display":       oled_ok,
-        "Microphone":         mic_ok,
-        "Speaker / TTS":      speaker_ok,
-        "Camera Subsystem":   cam_ok,
-        "Wi-Fi / Network":    net_ok,
-        "AgroVision Backend": backend_ok,
-    }
-
-    for name, status in results.items():
-        icon = "✅" if status else "❌"
-        state = "PASS" if status else "FAIL"
-        print(f"  {icon} {name:<22} [{state}]")
-
-    print()
-    print(f"  📸 Camera Type:        {cam_info.get('type', 'Unknown')}")
-    print(f"  🌐 IP Address:         {ip_addr}")
-    print(f"  🏷️  Device ID:          {settings.DEVICE_ID}")
-    print(f"  📡 Backend URL:        {api.base_url}")
-    print(f"  🔧 Software Version:   {settings.SOFTWARE_VERSION}")
-    print("=" * 50 + "\n")
-
-    all_ok = all(results.values())
-    if all_ok:
-        print("✅ All systems operational.\n")
-    else:
-        failed = [k for k, v in results.items() if not v]
-        print(f"⚠️  Issues detected: {', '.join(failed)}")
-        print("   Hardware issues will use fallback modes automatically.\n")
-
-    return all_ok
 
 
 # ==============================================================================
@@ -238,209 +170,102 @@ def run_health_check(api: AgroVisionApiService, net: NetworkService, oled, mic, 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="AgroVision Raspberry Pi Physical Hardware Assistant",
+        description="AgroVision Raspberry Pi Headless & Physical Hardware Assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python main.py                      # Full hardware mode (normal operation)
-  python main.py --text-mode          # Interactive text console (no hardware needed)
-  python main.py --command "what are my tasks today?"
-  python main.py --health             # Full diagnostic health check
-  python main.py --test-display       # Test OLED states
-  python main.py --test-camera        # Test camera capture + upload
-  python main.py --test-backend       # Test backend connectivity
+  python main.py                      # Headless / Terminal-First primary mode
+  python main.py --status             # Show system and network status
+  python main.py --hardware           # Inspect hardware capabilities (OLED, mic, cam)
+  python main.py --health             # Run diagnostic health check
+  python main.py --command "weather"  # Run single command and exit
         """
     )
 
-    parser.add_argument("--text-mode",      action="store_true", help="Interactive text console mode (no mic/speaker/OLED needed)")
-    parser.add_argument("--test-network",   action="store_true", help="Test network interface and backend connectivity")
-    parser.add_argument("--test-device",    action="store_true", help="Test device identity and pairing configuration")
-    parser.add_argument("--test-camera",    action="store_true", help="Test camera detection, capture, upload, and cleanup")
+    parser.add_argument("--status",         action="store_true", help="Print system status and exit")
+    parser.add_argument("--hardware",       action="store_true", help="Print hardware peripheral statuses and exit")
+    parser.add_argument("--health",         action="store_true", help="Run full diagnostic health check and exit")
+    parser.add_argument("--text-mode",      action="store_true", help="Force interactive terminal REPL mode")
+    parser.add_argument("--test-camera",    action="store_true", help="Test camera detection and capture")
     parser.add_argument("--test-display",   action="store_true", help="Test OLED display states")
-    parser.add_argument("--test-microphone",action="store_true", help="Test microphone input")
-    parser.add_argument("--test-speaker",   action="store_true", help="Test speaker text-to-speech")
     parser.add_argument("--test-backend",   action="store_true", help="Test connection to AgroVision backend")
     parser.add_argument("--test-realtime",  action="store_true", help="Test SSE real-time synchronization")
-    parser.add_argument("--health",         action="store_true", help="Run full diagnostic health check")
-    parser.add_argument("--command",        type=str,            help="Execute a single voice command string and exit")
+    parser.add_argument("--command",        type=str,            help="Execute a single command and exit")
 
     args = parser.parse_args()
 
     # --------------------------------------------------------------------------
-    # Driver selection: hardware vs. console/text mode
+    # 1. Initialize Hardware Capabilities & Drivers
     # --------------------------------------------------------------------------
-    use_console = (
-        args.text_mode
-        or settings.USE_CONSOLE_OLED
-        or os.environ.get("USE_CONSOLE_OLED") == "true"
-    )
+    hardware_manager.initialize_all()
 
-    if use_console:
-        oled_driver = ConsoleOledDriver()
-        mic_driver = TextModeAudioDriver()
-        speaker_driver = ConsoleSpeakerDriver()
+    # Display / OLED Driver: optional hardware
+    if hardware_manager.is_available("oled"):
+        oled_driver = hardware_manager.get_oled_driver()
     else:
-        oled_driver = LumaOledDriver()
-        mic_driver = AlsaAudioDriver()
-        speaker_driver = TtsSpeakerDriver()
+        # Luma driver without fallback emulator spam
+        oled_driver = LumaOledDriver(
+            port=settings.OLED_I2C_BUS,
+            address=settings.OLED_I2C_ADDRESS,
+            enable_fallback=settings.USE_CONSOLE_OLED
+        )
 
-    display = DisplayManager(oled_driver)
+    display = DisplayManager(driver=oled_driver, enable_terminal_output=True)
+
+    # Audio input driver: capability-aware
+    mic_driver = get_audio_input_driver()
+
+    # Speaker driver: optional
+    if settings.SPEAKER_ENABLED:
+        speaker_driver = TtsSpeakerDriver()
+    else:
+        speaker_driver = ConsoleSpeakerDriver()
+
+    # Camera driver: capability-aware (returns UnavailableCameraDriver when absent)
+    cam_driver = get_camera_driver()
+
+    # --------------------------------------------------------------------------
+    # 2. Initialize Core Services (Network, API, Auth)
+    # --------------------------------------------------------------------------
     api = AgroVisionApiService()
     auth = AuthService()
-
-    # Update API headers with the stored user ID
     api._update_headers(user_id=auth.device_config.userId)
-
     net = NetworkService(api)
-    cam_driver = get_camera_driver()
     cam_service = CameraService(cam_driver, display, speaker_driver, api, auth)
+    voice = VoiceService(mic_driver, speaker_driver, display, api, auth, camera_service=cam_service)
 
     # --------------------------------------------------------------------------
-    # Test / Diagnostic Modes
+    # 3. CLI Quick Diagnostic Modes
     # --------------------------------------------------------------------------
+    if args.hardware:
+        TerminalUI.print_hardware()
+        return
+
+    if args.status:
+        sync_mock = type('Obj', (), {'running': False})()
+        TerminalUI.print_status(api, auth, net, sync_mock)
+        return
 
     if args.health:
-        run_health_check(api, net, oled_driver, mic_driver, speaker_driver, cam_driver)
+        sync_mock = type('Obj', (), {'running': False})()
+        hb_mock = type('Obj', (), {'running': False})()
+        TerminalUI.print_health(api, net, auth, sync_mock, hb_mock)
         return
 
-    if args.test_camera:
-        print("\n" + "=" * 50)
-        print("📸 AGROVISION CAMERA DIAGNOSTIC & TEST")
-        print("=" * 50)
-        cam_info = cam_driver.check_camera()
-        print("1. Detecting Camera Hardware...")
-        print(f"   Camera Interface: {cam_info.get('type')}")
-        print(f"   Detected:         {'YES' if cam_info.get('detected') else 'NO'}")
-        print(f"   Status:           {cam_info.get('status', 'Ready')}")
-
-        print("\n2. Initializing Camera...")
-        cam_ok = cam_driver.initialize()
-        print(f"   Driver Init:      [{'OK' if cam_ok else 'FAIL'}]")
-
-        test_dir = os.path.join(str(settings.BASE_DIR), "temp_media")
-        os.makedirs(test_dir, exist_ok=True)
-        test_path = os.path.join(test_dir, "test_camera_capture.jpg")
-
-        print(f"\n3. Capturing Test Image → {test_path}...")
-        oled_driver.initialize()
-        display.show_taking_photo()
-        capture_res = cam_driver.capture_photo(test_path)
-        if capture_res and os.path.exists(test_path):
-            size_bytes = os.path.getsize(test_path)
-            print(f"   Capture Status:   [OK]")
-            print(f"   Resolution:       {capture_res.get('resolution', 'N/A')}")
-            print(f"   File Size:        {size_bytes} bytes ({size_bytes / 1024:.1f} KB)")
-        else:
-            print("   Capture Status:   [FAIL]")
-            return
-
-        print("\n4. Uploading to AgroVision Cloud Backend...")
-        display.show_uploading("Photo")
-        upload_res = api.upload_media(test_path, media_type="photo")
-        if upload_res and upload_res.get("url"):
-            print(f"   Upload Status:    [OK]")
-            print(f"   Cloud URL:        {upload_res.get('url')}")
-            media_payload = {
-                "userId": auth.device_config.userId,
-                "farmId": auth.device_config.farmId,
-                "fieldId": auth.device_config.fieldId,
-                "type": "photo",
-                "url": upload_res["url"],
-                "thumbnailUrl": upload_res["url"],
-                "caption": "Camera diagnostic test photo",
-                "latitude": None,
-                "longitude": None,
-                "source": "raspberry_pi",
-                "deviceId": auth.device_config.deviceId,
-            }
-            record = api.create_media(media_payload)
-            print(f"   Media DB Record:  [{'OK' if record else 'FAIL'}]")
-            display.show_photo_saved("Test Complete")
-        else:
-            print("   Upload Status:    [FAIL]")
-            display.show_upload_failed()
-
-        print("\n5. Cleaning Up Temporary Test File...")
-        try:
-            if os.path.exists(test_path):
-                os.remove(test_path)
-            print("   Cleanup Status:   [OK]")
-        except Exception as e:
-            print(f"   Cleanup Note:     {e}")
-
-        print("\n" + "=" * 50)
-        print("✅ CAMERA TEST COMPLETE")
-        print("=" * 50 + "\n")
-        return
-
-    if args.test_network:
-        print("\n" + "=" * 45)
-        print("🌐 AGROVISION NETWORK DIAGNOSTICS")
-        print("=" * 45)
-        ip = net.get_ip_address()
-        online = net.is_connected()
-        backend_ok = api.check_health()
-        print(f"  Local IP Address:    {ip}")
-        print(f"  Internet Status:     [{'ONLINE' if online else 'OFFLINE'}]")
-        print(f"  Backend Server:      {api.base_url} [{'REACHABLE' if backend_ok else 'UNREACHABLE'}]")
-        print("=" * 45 + "\n")
-        return
-
-    if args.test_device:
-        print("\n" + "=" * 45)
-        print("🏷️  AGROVISION DEVICE IDENTITY")
-        print("=" * 45)
-        cfg = auth.device_config
-        print(f"  Device ID:           {cfg.deviceId}")
-        print(f"  Device Name:         {cfg.name}")
-        print(f"  Device Type:         {cfg.deviceType}")
-        print(f"  Assigned User ID:    {cfg.userId}")
-        print(f"  Assigned Farm ID:    {cfg.farmId}")
-        print(f"  Assigned Field ID:   {cfg.fieldId}")
-        print(f"  Paired:              {'YES' if cfg.paired else 'NO (run normally to pair)'}")
-        print(f"  Auth Token Set:      {'YES' if cfg.authToken else 'NO'}")
-        print(f"  Config File:         {auth.config_path}")
-        print("=" * 45 + "\n")
-        return
-
-    if args.test_display:
-        oled_driver.initialize()
-        print("\nTesting OLED Display states...")
-        display.show_boot();         time.sleep(1.0)
-        display.show_pairing("AGRO-8842"); time.sleep(1.0)
-        display.show_connecting();   time.sleep(1.0)
-        display.show_ready("Green Valley Farm", "Mango Plantation"); time.sleep(1.0)
-        display.show_listening();    time.sleep(1.0)
-        display.show_thinking();     time.sleep(1.0)
-        display.show_speaking("WEATHER\n28°C Partly Cloudy\nRain: 20%"); time.sleep(1.0)
-        display.show_speaking("TASKS TODAY\n1. Inspect mango\n2. Check drip"); time.sleep(1.0)
-        display.show_taking_photo(); time.sleep(1.0)
-        display.show_uploading("Photo"); time.sleep(1.0)
-        display.show_photo_saved("Mango Field"); time.sleep(1.0)
-        display.show_recording();    time.sleep(1.0)
-        display.show_video_saved();  time.sleep(1.0)
-        display.show_offline();      time.sleep(1.0)
-        display.show_error("Test error message"); time.sleep(1.0)
-        display.show_ready("Green Valley Farm", "Mango Plantation")
-        print("OLED display test complete.\n")
-        return
-
-    if args.test_speaker:
-        speaker_driver.initialize()
-        test_phrase = "AgroVision hardware speaker test. Audio output is fully operational. The crops are looking healthy today."
-        print(f"Testing speaker: '{test_phrase}'")
-        speaker_driver.speak(test_phrase)
-        return
-
-    if args.test_microphone:
-        mic_driver.initialize()
-        print("\nMicrophone test — speak a voice command:")
-        result = mic_driver.listen_and_transcribe("Testing Microphone. Speak now:")
-        print(f"\nTranscription result: '{result}'")
-        if result:
-            print("✅ Microphone OK")
-        else:
-            print("⚠️  No transcription captured (timeout or no audio)")
+    if args.command:
+        sync_mock = type('Obj', (), {'running': False})()
+        hb_mock = type('Obj', (), {'running': False})()
+        TerminalUI.execute_command(
+            cmd=args.command,
+            api=api,
+            auth=auth,
+            net=net,
+            sync=sync_mock,
+            heartbeat=hb_mock,
+            voice=voice,
+            camera_service=cam_service,
+            display=display,
+        )
         return
 
     if args.test_backend:
@@ -454,153 +279,149 @@ Examples:
             print(f"  Retrieved Farms:     {len(farms)} farm(s)")
             tasks = api.get_tasks()
             print(f"  Retrieved Tasks:     {len(tasks)} task(s)")
-            weather = api.get_weather()
-            print(f"  Weather Data:        [{'OK - temp=' + str(weather.get('current', {}).get('temperature', '?')) + '°C' if weather else 'No weather cached'}]")
         return
 
-    if args.test_realtime:
-        print(f"\nConnecting to SSE stream at {api.base_url}/api/sync/events...")
-        sync = RealtimeSyncService(lambda ev, d: print(f"  → [EVENT] {ev}: {list(d.keys())}"))
-        sync.start()
-        print("Listening for 10 seconds...")
-        time.sleep(10)
-        sync.stop()
-        print("Realtime test ended.\n")
+    if args.test_camera:
+        print("\n" + "=" * 50)
+        print("📸 AGROVISION CAMERA DIAGNOSTIC & TEST")
+        print("=" * 50)
+        cam_info = cam_driver.check_camera()
+        print(f"  Camera Type:      {cam_info.get('type')}")
+        print(f"  Detected:         {'YES' if cam_info.get('detected') else 'NO'}")
+        print(f"  Status:           {cam_info.get('status', 'Unavailable')}")
+        if not cam_info.get("detected"):
+            print("\n  Camera is currently unavailable.")
+            print("  Connect a supported camera to enable photo capture.\n")
         return
 
-    # --------------------------------------------------------------------------
-    # Single command mode (useful for shell scripting + automation)
-    # --------------------------------------------------------------------------
-    if args.command:
-        oled_driver.initialize()
-        mic_driver.initialize()
-        speaker_driver.initialize()
-        voice = VoiceService(mic_driver, speaker_driver, display, api, auth, camera_service=cam_service)
-        voice.run_interaction_cycle(text_input=args.command)
-        return
-
-    # --------------------------------------------------------------------------
-    # Text mode: interactive development console
-    # --------------------------------------------------------------------------
-    if args.text_mode:
-        print("\n" + "=" * 55)
-        print("🌿 AgroVision Interactive Text Mode")
-        print("   Type voice commands. Type 'exit' or 'quit' to stop.")
-        print("=" * 55 + "\n")
-
-        oled_driver.initialize()
-        mic_driver.initialize()
-        speaker_driver.initialize()
-
-        # Pairing check in text mode
-        if not auth.is_paired():
-            logger.warning("[MAIN] Device not paired. Attempting pairing flow...")
-            paired = run_pairing_flow(api, auth, display, speaker_driver)
-            if not paired:
-                logger.error("[MAIN] Pairing failed. Exiting text mode.")
-                return
-
-        api.register_device(auth.device_config.farmId, auth.device_config.fieldId)
-        display.show_ready("Green Valley Farm", "Mango Plantation")
-        voice = VoiceService(mic_driver, speaker_driver, display, api, auth, camera_service=cam_service)
-
-        while True:
-            try:
-                cmd = input("\n[AgroVision] > ").strip()
-                if not cmd:
-                    continue
-                if cmd.lower() in ("exit", "quit", "q"):
-                    print("Exiting text mode. Goodbye.")
-                    break
-                voice.run_interaction_cycle(text_input=cmd)
-            except (KeyboardInterrupt, EOFError):
-                print("\nExiting.")
-                break
+    if args.test_display:
+        print("\nTesting OLED Display states...")
+        display.show_boot();         time.sleep(0.5)
+        display.show_connecting();   time.sleep(0.5)
+        display.show_ready("Green Valley Farm", "Mango Field"); time.sleep(0.5)
+        display.show_speaking("AGROVISION\nTerminal First Mode"); time.sleep(0.5)
+        print("Display test complete.\n")
         return
 
     # --------------------------------------------------------------------------
-    # NORMAL BOOT — Full hardware mode
+    # 4. Standard Application Startup (Headless / Terminal-First)
     # --------------------------------------------------------------------------
-    logger.info("=" * 55)
-    logger.info(f"🌿 AgroVision Raspberry Pi Client [{settings.SOFTWARE_VERSION}]")
-    logger.info(f"   Device ID:  {auth.device_config.deviceId}")
-    logger.info(f"   Backend:    {settings.BACKEND_URL}")
-    logger.info(f"   Mode:       {'Console' if use_console else 'Hardware'}")
-    logger.info("=" * 55)
+    # Display Startup Banner
+    TerminalUI.print_startup_banner(
+        device_id=auth.device_config.deviceId,
+        network_status="CONNECTING",
+        backend_status="CONNECTING",
+        realtime_status="CONNECTING",
+    )
 
-    # Initialize hardware
-    oled_driver.initialize()
-    mic_driver.initialize()
-    speaker_driver.initialize()
     display.show_boot()
-    time.sleep(1.0)
 
-    # Check network + backend
-    display.show_connecting()
-    if not api.check_health():
-        logger.warning("[MAIN] AgroVision backend not reachable. Starting in offline mode.")
+    # Network & Backend Reachability Check
+    net_connected = net.is_connected()
+    backend_connected = api.check_health()
+
+    net_status_str = "CONNECTED" if net_connected else "OFFLINE"
+    backend_status_str = "CONNECTED" if backend_connected else "UNREACHABLE"
+
+    if not backend_connected:
+        logger.warning("[MAIN] AgroVision backend not reachable. Starting in offline/standalone mode.")
         display.show_offline()
-        # Still start heartbeat — it will retry when backend comes back
     else:
-        logger.info("[MAIN] Connected to AgroVision backend.")
+        logger.info(f"[MAIN] Connected to AgroVision backend at {api.base_url}.")
 
     # Pairing flow (if device is not yet paired)
     if not auth.is_paired():
         logger.warning("[MAIN] Device not paired. Starting pairing flow...")
         paired = run_pairing_flow(api, auth, display, speaker_driver)
         if not paired:
-            logger.error("[MAIN] Pairing failed or timed out. Restarting in 10s (systemd will restart).")
-            display.show_error("Pairing failed")
-            time.sleep(10)
-            sys.exit(1)
+            logger.warning("[MAIN] Pairing not completed. Continuing in unpaired mode.")
 
-    # Register device with backend (also updates last-seen)
-    api.register_device(auth.device_config.farmId, auth.device_config.fieldId)
+    # Register device with backend
+    if backend_connected:
+        api.register_device(auth.device_config.farmId, auth.device_config.fieldId)
 
-    # Start background services
+    # Start Background Core Services (Heartbeat & SSE Realtime)
     heartbeat = HeartbeatService(api)
     heartbeat.start()
-    logger.info("[MAIN] Heartbeat service started.")
+    logger.info("[MAIN] Heartbeat service started in background.")
 
     sync = RealtimeSyncService(
         lambda ev, d: handle_sync_event(ev, d, display, speaker_driver)
     )
     sync.start()
-    logger.info("[MAIN] Realtime SSE sync service started.")
+    logger.info("[MAIN] Realtime SSE sync service started in background.")
 
-    # Resolve farm + field names for display
-    farms = api.get_farms()
+    realtime_status_str = "CONNECTED"
+
+    # Display Ready Banner
+    TerminalUI.print_ready_banner(
+        device_id=auth.device_config.deviceId,
+        status="ONLINE" if backend_connected else "STANDALONE",
+        backend_status=backend_status_str,
+        realtime_status=realtime_status_str,
+    )
+
+    farms = api.get_farms() if backend_connected else []
     farm_name = farms[0].get("name", "Green Valley Farm") if farms else "Green Valley Farm"
-    fields = api.get_fields(auth.device_config.farmId)
+    fields = api.get_fields(auth.device_config.farmId) if backend_connected else []
     field_name = fields[0].get("name", "Farm Field") if fields else "Farm Field"
 
     display.show_ready(farm_name, field_name)
-    speaker_driver.speak(f"AgroVision ready. Field: {field_name}.")
 
-    # Initialize camera
-    cam_driver.initialize()
+    # --------------------------------------------------------------------------
+    # 5. Interactive Terminal Loop or Headless Daemon Mode
+    # --------------------------------------------------------------------------
+    is_interactive = sys.stdin.isatty() or args.text_mode
 
-    # Main voice loop
-    voice = VoiceService(mic_driver, speaker_driver, display, api, auth, camera_service=cam_service)
-    logger.info("[MAIN] Entering main voice loop. Ready for commands.")
+    if is_interactive:
+        print("Type 'help' for commands, or type any request for AgroVision AI.")
+        print("Type 'exit' or 'quit' to stop.\n")
 
-    try:
-        while True:
-            voice.run_interaction_cycle()
-            time.sleep(0.5)
-            display.show_ready(farm_name, field_name)
-    except KeyboardInterrupt:
-        logger.info("[MAIN] Shutdown signal received (Ctrl+C).")
-    finally:
-        logger.info("[MAIN] Shutting down AgroVision Pi...")
-        heartbeat.stop()
-        sync.stop()
-        cam_service.release()
         try:
-            display.driver.clear()
-        except Exception:
-            pass
-        logger.info("[MAIN] Shutdown complete.")
+            while True:
+                try:
+                    cmd = input("AgroVision > ").strip()
+                    if not cmd:
+                        continue
+                    keep_running = TerminalUI.execute_command(
+                        cmd=cmd,
+                        api=api,
+                        auth=auth,
+                        net=net,
+                        sync=sync,
+                        heartbeat=heartbeat,
+                        voice=voice,
+                        camera_service=cam_service,
+                        display=display,
+                    )
+                    if not keep_running:
+                        break
+                except EOFError:
+                    print("\nEOF received. Exiting.")
+                    break
+        except KeyboardInterrupt:
+            print("\nShutdown signal received (Ctrl+C).")
+    else:
+        # Non-interactive / systemd background service mode
+        logger.info("[MAIN] Running in headless background daemon mode. Services active.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("[MAIN] Shutdown signal received.")
+
+    # --------------------------------------------------------------------------
+    # 6. Clean Shutdown
+    # --------------------------------------------------------------------------
+    logger.info("[MAIN] Shutting down AgroVision Pi...")
+    heartbeat.stop()
+    sync.stop()
+    cam_service.release()
+    try:
+        display.driver.clear()
+    except Exception:
+        pass
+    logger.info("[MAIN] Shutdown complete.")
 
 
 if __name__ == "__main__":

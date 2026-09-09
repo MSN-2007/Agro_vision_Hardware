@@ -1,6 +1,25 @@
 from hardware.base import AudioInputDriver
+from config.settings import settings
 from utils.logger import logger
 from typing import Optional
+
+
+class DisabledAudioDriver(AudioInputDriver):
+    """Driver used when microphone is disabled or unavailable."""
+    def __init__(self, reason: str = "DISABLED"):
+        self.reason = reason
+
+    @property
+    def is_available(self) -> bool:
+        return False
+
+    def initialize(self) -> bool:
+        logger.info(f"[MIC] Microphone is {self.reason.lower()} for current hardware configuration.")
+        return False
+
+    def listen_and_transcribe(self, prompt: str = "Listening...") -> Optional[str]:
+        return None
+
 
 class TextModeAudioDriver(AudioInputDriver):
     def initialize(self) -> bool:
@@ -16,6 +35,7 @@ class TextModeAudioDriver(AudioInputDriver):
             return val
         except (KeyboardInterrupt, EOFError):
             return None
+
 
 class AlsaAudioDriver(AudioInputDriver):
     def __init__(self):
@@ -51,3 +71,12 @@ class AlsaAudioDriver(AudioInputDriver):
                 return None
 
         return self.fallback.listen_and_transcribe(prompt)
+
+
+def get_audio_input_driver() -> AudioInputDriver:
+    """Factory to get the appropriate audio input driver based on configuration."""
+    if not settings.MICROPHONE_ENABLED:
+        logger.info("[MIC] Microphone input is disabled by configuration (MICROPHONE_ENABLED=false).")
+        return DisabledAudioDriver(reason="DISABLED")
+    return AlsaAudioDriver()
+

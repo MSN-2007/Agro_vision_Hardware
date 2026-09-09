@@ -41,27 +41,26 @@ class VoiceService:
         response = self.api.converse(spoken_text, farm_id=farm_id, field_id=field_id)
 
         # Handle Camera Intents
-        if response.intent == "TAKE_PHOTO":
-            if self.camera_service:
-                self.camera_service.capture_photo(farm_id=farm_id, field_id=field_id)
-            else:
-                self.display.show_camera_error("No camera service")
-                self.speaker.speak("Camera is not available.")
-            return True
+        from hardware.capabilities import hardware_manager
+        if response.intent in ("TAKE_PHOTO", "START_VIDEO", "STOP_VIDEO"):
+            if not hardware_manager.is_available("camera"):
+                print("\n📷 Camera is currently unavailable.")
+                print("   Connect a supported camera to enable photo capture.\n")
+                self.display.show_camera_error("Camera unavailable")
+                return True
 
-        elif response.intent == "START_VIDEO":
-            if self.camera_service:
-                self.camera_service.start_video(farm_id=farm_id, field_id=field_id)
-            else:
-                self.speaker.speak("Camera is not available for video.")
-            return True
-
-        elif response.intent == "STOP_VIDEO":
-            if self.camera_service:
-                self.camera_service.stop_video()
-            else:
-                self.speaker.speak("Camera is not available.")
-            return True
+            if response.intent == "TAKE_PHOTO":
+                if self.camera_service:
+                    self.camera_service.capture_photo(farm_id=farm_id, field_id=field_id)
+                return True
+            elif response.intent == "START_VIDEO":
+                if self.camera_service:
+                    self.camera_service.start_video(farm_id=farm_id, field_id=field_id)
+                return True
+            elif response.intent == "STOP_VIDEO":
+                if self.camera_service:
+                    self.camera_service.stop_video()
+                return True
 
         # Standard voice/AI response
         self.display.show_speaking(response.oledText)

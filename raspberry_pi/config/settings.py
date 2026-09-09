@@ -30,6 +30,15 @@ class Settings:
     ENVIRONMENT: str = os.getenv("AGROVISION_ENVIRONMENT", "production")
     USE_CONSOLE_OLED: bool = os.getenv("USE_CONSOLE_OLED", "false").lower() == "true"
 
+    # Hardware & Peripherals configuration
+    OLED_ENABLED: str = os.getenv("OLED_ENABLED", "auto").lower()
+    MICROPHONE_ENABLED: bool = os.getenv("MICROPHONE_ENABLED", "false").lower() == "true"
+    CAMERA_ENABLED: bool = os.getenv("CAMERA_ENABLED", "false").lower() == "true"
+    SPEAKER_ENABLED: bool = os.getenv("SPEAKER_ENABLED", "false").lower() == "true"
+    TERMINAL_UI_ENABLED: bool = os.getenv("TERMINAL_UI_ENABLED", "true").lower() == "true"
+    OLED_I2C_BUS: int = int(os.getenv("OLED_I2C_BUS", "1"))
+    OLED_I2C_ADDRESS: int = int(os.getenv("OLED_I2C_ADDRESS", "0x3C"), 0)
+
     # Versioning & timing
     SOFTWARE_VERSION: str = "v1.3.0"
     HEARTBEAT_INTERVAL_SEC: int = int(os.getenv("HEARTBEAT_INTERVAL_SEC", "30"))
